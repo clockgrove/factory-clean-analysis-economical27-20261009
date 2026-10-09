@@ -38,10 +38,23 @@ export function queryParams(intent, {pagination = true} = {}) {
   if (pagination) { params.set('page', x.page); params.set('pageSize', x.pageSize); }
   return params;
 }
+export function overviewFilters(intent) {
+  const x = normalizeIntent(intent);
+  return {q: x.q, service: x.service, status: x.status, severity: x.severity, from: x.from, to: x.to};
+}
+export function overviewIdentity(intent) { return JSON.stringify(overviewFilters(intent)); }
+export function overviewParams(intent) {
+  const params = new URLSearchParams();
+  const filters = overviewFilters(intent);
+  if (filters.q) params.set('q', filters.q);
+  for (const key of ['from', 'to']) if (filters[key]) params.set(key, filters[key]);
+  for (const key of Object.keys(values)) for (const value of filters[key]) params.append(key, value);
+  return params;
+}
 const operation = token => ({token, pending: false, error: null});
 const emptyDetail = token => ({...operation(token), id: null, data: null});
 export function createState() {
-  return {intent: normalizeIntent(), result: null, resultOp: operation(0), detail: emptyDetail(0), exportOp: operation(0)};
+  return {intent: normalizeIntent(), result: null, resultOp: operation(0), overview: null, overviewOp: {...operation(0), identity: overviewIdentity(defaults)}, detail: emptyDetail(0), exportOp: operation(0)};
 }
 export function isResultCurrent(state) {
   return !!state.result && JSON.stringify(state.intent) === JSON.stringify(state.result.intent);
@@ -51,7 +64,8 @@ export function canPaginate(state) {
 }
 function changeIntent(state, intent, force = true) {
   if (!force && JSON.stringify(intent) === JSON.stringify(state.intent)) return state;
-  return {...state, intent, resultOp: operation(state.resultOp.token + 1), detail: emptyDetail(state.detail.token + 1), exportOp: operation(state.exportOp.token + 1)};
+  const overviewChanged = overviewIdentity(intent) !== overviewIdentity(state.intent);
+  return {...state, intent, resultOp: operation(state.resultOp.token + 1), overviewOp: overviewChanged ? {...operation(state.overviewOp.token + 1), identity: overviewIdentity(intent)} : state.overviewOp, detail: emptyDetail(state.detail.token + 1), exportOp: operation(state.exportOp.token + 1)};
 }
 export function transition(state, event) {
   switch (event.type) {
@@ -75,6 +89,17 @@ export function transition(state, event) {
     case 'result:finish':
       if (event.token !== state.resultOp.token) return state;
       return {...state, resultOp: {...state.resultOp, pending: false}};
+    case 'overview:start':
+      return {...state, overviewOp: {...operation(state.overviewOp.token + 1), pending: true, identity: overviewIdentity(state.intent)}};
+    case 'overview:success':
+      if (event.token !== state.overviewOp.token || !state.overviewOp.pending || state.overviewOp.identity !== overviewIdentity(state.intent)) return state;
+      return {...state, overview: {identity: state.overviewOp.identity, filters: overviewFilters(state.intent), data: event.data}, overviewOp: operation(event.token)};
+    case 'overview:failure':
+      if (event.token !== state.overviewOp.token || !state.overviewOp.pending || state.overviewOp.identity !== overviewIdentity(state.intent)) return state;
+      return {...state, overviewOp: {...operation(event.token), identity: state.overviewOp.identity, error: event.error}};
+    case 'overview:finish':
+      if (event.token !== state.overviewOp.token) return state;
+      return {...state, overviewOp: {...state.overviewOp, pending: false}};
     case 'detail:select': return {...state, detail: {...emptyDetail(state.detail.token + 1), id: event.id}};
     case 'detail:close': return {...state, detail: emptyDetail(state.detail.token + 1)};
     case 'detail:start':
@@ -102,6 +127,8 @@ export function announcement(state) {
   if (state.detail.id) return state.detail.error || (state.detail.pending ? 'Loading incident details.' : state.detail.data ? 'Incident details ready.' : '');
   if (state.resultOp.error) return state.resultOp.error;
   if (state.resultOp.pending) return state.result ? 'Loading results. Previous results are shown.' : 'Loading results.';
+  if (state.overviewOp.error) return state.overviewOp.error;
+  if (state.overviewOp.pending) return 'Loading service overview.';
   if (state.exportOp.error) return state.exportOp.error;
   if (state.exportOp.pending) return 'Preparing CSV download.';
   return isResultCurrent(state) ? `${state.result.data.total} matching incidents.` : '';

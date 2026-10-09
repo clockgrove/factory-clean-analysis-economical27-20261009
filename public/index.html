@@ -27,6 +27,11 @@
     <section id="results" tabindex="-1" aria-labelledby="result-title">
       <div class="section-heading"><div><p class="eyebrow">All matching incidents</p><h2 id="result-title">Results overview</h2></div><span id="freshness" class="muted"></span></div>
       <div id="active-filters" class="chips" aria-label="Active selections"></div>
+      <section id="service-overview" class="service-overview" aria-labelledby="service-overview-title" aria-busy="true">
+        <div class="overview-heading"><div><h3 id="service-overview-title">Service overview</h3><p class="muted">Counts cover every matching incident across all pages. Unresolved includes open and in progress; high severity includes critical and high. Average resolution time uses resolved incidents only.</p></div><span id="overview-selection" class="muted"></span></div>
+        <div id="overview-message" class="operation-message" role="status" aria-live="polite"></div>
+        <div id="service-measures" class="service-measures"></div>
+      </section>
       <div id="summary" class="summary"></div>
       <section class="chart" aria-labelledby="chart-title"><h3 id="chart-title">Opened by day · UTC</h3><p class="muted">Counts cover the entire matching result.</p><div id="chart-bars" aria-hidden="true"></div><details><summary>Read daily counts</summary><p id="chart-text"></p></details></section>
       <div class="table-controls"><div><label for="sort">Sort by</label><select id="sort"><option value="openedAt">Opened date</option><option value="severity">Severity</option></select></div><div><label for="direction">Order</label><select id="direction"><option value="desc">Newest / highest first</option><option value="asc">Oldest / lowest first</option></select></div><div><label for="page-size">Rows per page</label><select id="page-size"><option value="25">25</option><option value="50">50</option></select></div></div>
@@ -35,8 +40,14 @@
       <nav class="pagination" aria-label="Result pages"><button id="previous" class="secondary" type="button">Previous</button><span id="page-label"></span><button id="next" class="secondary" type="button">Next</button></nav>
       <div id="export-message" class="operation-message"></div>
     </section>
+    <section id="triage" class="triage" aria-labelledby="triage-title">
+      <div class="section-heading"><div><p class="eyebrow">This browser only</p><h2 id="triage-title" tabindex="-1">Personal triage</h2></div><span class="muted">Ordered as incidents are added</span></div>
+      <p id="triage-storage-message" role="status" aria-live="polite"></p>
+      <p id="triage-empty" class="muted">No incidents in triage yet. Add one from its full details.</p>
+      <ol id="triage-items" class="triage-items"></ol>
+    </section>
   </main>
-  <dialog id="detail" aria-labelledby="detail-title"><div class="detail-heading"><h2 id="detail-title">Incident details</h2><button id="close-detail" class="secondary" type="button">Close details</button></div><div id="detail-content"></div></dialog>
+  <dialog id="detail" aria-labelledby="detail-title"><div class="detail-heading"><h2 id="detail-title">Incident details</h2><div class="detail-actions"><button id="add-triage" class="secondary" type="button">Add to triage</button><button id="close-detail" class="secondary" type="button">Close details</button></div></div><div id="detail-content"></div></dialog>
   <p id="announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
   <footer>Fictional incidents. Dates and times are shown in UTC. Saved views stay in this browser.</footer>
 </body>

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createState, transition, savedView, queryParams, canPaginate, announcement} from '../../public/state.js';
+import {createState, transition, savedView, queryParams, overviewIdentity, overviewParams, canPaginate, announcement} from '../../public/state.js';
 // Completion events are component inputs, not HTTP response fixtures.
 const result = (state, page = 1, totalPages = 4) => {
   state = transition(state, {type: 'result:start'});
@@ -105,6 +105,42 @@ test('intent replacement clears failed operation state; later failures and clean
   assert.equal(s.resultOp.error, null);
   for (const type of ['result:failure', 'result:finish']) assert.equal(transition(s, {type, token, error: 'Earlier error'}), s);
   assert.equal(announcement(s), '');
+});
+
+test('overview follows filter identity across paging, owns failure retry and rejects late writers after filter changes', () => {
+  let s = result(createState());
+  s = transition(s, {type: 'overview:start'});
+  const first = s.overviewOp.token;
+  s = transition(s, {type: 'overview:success', token: first, data: {services: [{service: 'Billing'}]}});
+  const snapshot = s.overview;
+  const identity = overviewIdentity(s.intent);
+  assert.deepEqual([...overviewParams({...s.intent, page: 4, pageSize: 50, sort: 'severity', direction: 'asc'}).keys()], []);
+  s = transition(s, {type: 'intent', patch: {pageSize: 50, sort: 'severity'}});
+  assert.equal(overviewIdentity(s.intent), identity);
+  assert.equal(s.overview, snapshot);
+  const existingToken = s.overviewOp.token;
+  s = transition(s, {type: 'intent', patch: {q: 'Billing'}});
+  assert.equal(s.overview, snapshot);
+  assert.equal(s.overviewOp.error, null);
+  assert.equal(s.overviewOp.pending, false);
+  s = transition(s, {type: 'overview:start'});
+  const current = s.overviewOp.token;
+  for (const type of ['overview:success', 'overview:failure', 'overview:finish']) {
+    assert.equal(transition(s, {type, token: existingToken, data: {services: []}, error: 'old failure'}), s);
+  }
+  s = transition(s, {type: 'overview:failure', token: current, error: 'Overview offline'});
+  assert.equal(announcement(s), 'Overview offline');
+  s = transition(s, {type: 'overview:start'});
+  assert.equal(s.overviewOp.error, null);
+  assert.equal(overviewParams(s.intent).get('q'), 'Billing');
+  assert.equal(transition(s, {type: 'overview:finish', token: current}), s);
+  const retry = s.overviewOp.token;
+  s = transition(s, {type: 'detail:select', id: 'INC-000001'});
+  s = transition(s, {type: 'detail:start'});
+  s = transition(s, {type: 'overview:success', token: retry, data: {services: []}});
+  assert.equal(s.detail.id, 'INC-000001');
+  assert.equal(s.overview.identity, overviewIdentity(s.intent));
+  assert.equal(s.overview.data.services.length, 0);
 });
 test('export retry invalidates prior writers and retains the current filter and sort', () => {
   let s = transition(createState(), {type: 'intent', patch: {q: 'CSV', sort: 'severity', status: ['open']}});
