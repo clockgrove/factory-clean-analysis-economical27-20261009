@@ -90,6 +90,33 @@ function summary(rows) {
   };
 }
 
+function serviceOverview(rows, query) {
+  const services = new Map();
+  for (const row of matching(rows, query)) {
+    let measure = services.get(row.service);
+    if (!measure) {
+      measure = { service: row.service, incidentCount: 0, unresolvedCount: 0, highSeverityCount: 0, resolvedCount: 0, resolutionMilliseconds: 0 };
+      services.set(row.service, measure);
+    }
+    measure.incidentCount++;
+    if (row.status !== 'resolved') measure.unresolvedCount++;
+    if (row.severity === 'critical' || row.severity === 'high') measure.highSeverityCount++;
+    if (row.status === 'resolved') {
+      measure.resolvedCount++;
+      measure.resolutionMilliseconds += Date.parse(row.resolvedAt) - Date.parse(row.openedAt);
+    }
+  }
+  return [...services.values()]
+    .sort((a, b) => b.unresolvedCount - a.unresolvedCount || compare(a.service, b.service))
+    .map(({ service, incidentCount, unresolvedCount, highSeverityCount, resolvedCount, resolutionMilliseconds }) => ({
+      service,
+      incidentCount,
+      unresolvedCount,
+      highSeverityCount,
+      averageResolutionHours: resolvedCount === 0 ? null : resolutionMilliseconds / resolvedCount / 3600000,
+    }));
+}
+
 function csvCell(value) {
   const text = value === null ? '' : Array.isArray(value) ? JSON.stringify(value) : String(value);
   return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
@@ -136,6 +163,10 @@ export async function createAppServer() {
         const totalPages = Math.ceil(matches.length / query.pageSize);
         const page = Math.min(query.page, totalPages || 1);
         return json(response, 200, { items: matches.slice((page - 1) * query.pageSize, page * query.pageSize), page, pageSize: query.pageSize, total: matches.length, totalPages, summary: summary(matches) });
+      }
+      if (url.pathname === '/api/overview') {
+        const query = parseQuery(url.searchParams, false);
+        return json(response, 200, { services: serviceOverview(rows, query) });
       }
       if (url.pathname.startsWith('/api/incidents/')) {
         const row = byId.get(decodeURIComponent(url.pathname.slice('/api/incidents/'.length)));
