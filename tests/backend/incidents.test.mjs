@@ -35,6 +35,35 @@ function expected(rows, options = {}) {
   return { found, summary: { total: found.length, unresolved, highSeverity, openedByDay: Object.keys(counts).sort().map(date => ({ date, count: counts[date] })) } };
 }
 
+function expectedOverview(rows, options = {}) {
+  const groups = new Map();
+  for (const row of expected(rows, options).found) {
+    let measure = groups.get(row.service);
+    if (!measure) {
+      measure = { service: row.service, incidentCount: 0, unresolvedCount: 0, highSeverityCount: 0, resolvedCount: 0, resolutionMilliseconds: 0 };
+      groups.set(row.service, measure);
+    }
+    measure.incidentCount += 1;
+    if (row.status !== 'resolved') measure.unresolvedCount += 1;
+    if (row.severity === 'critical' || row.severity === 'high') measure.highSeverityCount += 1;
+    if (row.resolvedAt !== null) {
+      measure.resolvedCount += 1;
+      measure.resolutionMilliseconds += Date.parse(row.resolvedAt) - Date.parse(row.openedAt);
+    }
+  }
+  return {
+    services: [...groups.values()]
+      .sort((a, b) => b.unresolvedCount - a.unresolvedCount || (a.service < b.service ? -1 : a.service > b.service ? 1 : 0))
+      .map(({ service, incidentCount, unresolvedCount, highSeverityCount, resolvedCount, resolutionMilliseconds }) => ({
+        service,
+        incidentCount,
+        unresolvedCount,
+        highSeverityCount,
+        averageResolutionHours: resolvedCount === 0 ? null : resolutionMilliseconds / resolvedCount / 3600000,
+      })),
+  };
+}
+
 function query(options) {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(options)) {
@@ -96,6 +125,13 @@ test('canonical incidents through real loopback HTTP', async t => {
       assert.deepEqual(actual, { items: found.slice((page - 1) * pageSize, page * pageSize), page, pageSize, total: found.length, totalPages, summary });
       return actual;
     };
+    const checkOverview = async (options = {}) => {
+      const response = await fetch(`${base}/api/overview?${query(options)}`);
+      assert.equal(response.status, 200);
+      const actual = await response.json();
+      assert.deepEqual(actual, expectedOverview(rows, options));
+      return actual;
+    };
 
     await t.test('defaults and whole-result summaries', async () => {
       const body = await checkList();
@@ -103,6 +139,40 @@ test('canonical incidents through real loopback HTTP', async t => {
       assert.equal(body.items.length, 25);
       assert.equal(body.summary.openedByDay.length, 90);
       assert.equal(body.summary.openedByDay.reduce((n, bucket) => n + bucket.count, 0), 2400);
+    });
+    await t.test('overview aggregates every matching incident with independently reduced measures', async () => {
+      const options = { q: 'incident', service: ['Billing', 'Notifications'], severity: ['critical', 'high'], from: '2026-04-15', to: '2026-06-13' };
+      const { found } = expected(rows, options);
+      assert.ok(found.length > 25);
+      const actual = await checkOverview(options);
+      assert.deepEqual(actual, expectedOverview(rows, options));
+      assert.ok(actual.services.every(service => service.incidentCount > 0));
+      for (let index = 1; index < actual.services.length; index++) {
+        const previous = actual.services[index - 1], current = actual.services[index];
+        assert.ok(previous.unresolvedCount > current.unresolvedCount ||
+          (previous.unresolvedCount === current.unresolvedCount && previous.service < current.service));
+      }
+    });
+    await t.test('overview ignores page, page size, sort and direction', async () => {
+      const filters = { q: 'incident', service: ['Billing', 'Notifications'], severity: ['critical', 'high'], from: '2026-04-15', to: '2026-06-13' };
+      const first = await checkOverview({ ...filters, page: 1, pageSize: 25, sort: 'openedAt', direction: 'desc' });
+      const later = await checkOverview({ ...filters, page: 999999, pageSize: 50, sort: 'severity', direction: 'asc' });
+      assert.deepEqual(later, first);
+    });
+    await t.test('overview reports null resolution averages for unresolved-only matches and an empty list for no matches', async () => {
+      const unresolvedOnly = await checkOverview({ service: 'Accounts', status: ['open', 'in_progress'] });
+      assert.ok(unresolvedOnly.services.length > 0);
+      assert.ok(unresolvedOnly.services.every(service => service.averageResolutionHours === null));
+      assert.deepEqual(await checkOverview({ q: 'no-such-overview-incident' }), { services: [] });
+    });
+    await t.test('overview validates the same query parameters as the incident list', async () => {
+      for (const params of ['service=billing', 'from=2026-02-30', 'page=0', 'pageSize=100', 'sort=id', 'unknown=yes']) {
+        const response = await fetch(`${base}/api/overview?${params}`);
+        assert.equal(response.status, 400, params);
+        const body = await response.json();
+        assert.equal(body.error.code, 'INVALID_QUERY');
+        assert.ok(body.error.message.length);
+      }
     });
     await t.test('literal case-insensitive search in all three fields', async () => {
       for (const q of ['inc-000001', 'BATCH PROCESSING DELAY', 'sEcOnD LiNe: <SAMPLE>', 'retry, then continue', '.*', '[', 'Cobalt']) await checkList({ q });
