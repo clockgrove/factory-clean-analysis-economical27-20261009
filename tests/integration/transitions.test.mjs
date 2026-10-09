@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createState, transition, announcement, queryParams} from '../../public/state.js';
+import {createState, transition, announcement, queryParams, overviewIdentity, overviewParams} from '../../public/state.js';
 import {expected, rows} from './oracle.js';
 
 const send = (state, type, payload = {}) => transition(state, {type, ...payload});
@@ -70,4 +70,58 @@ test('address navigation supersedes all writers, failure and late cleanup; retry
   state = send(state, 'result:success', {token: state.resultOp.token, data: data({q: 'Search'})});
   assert.equal(state.intent.page, 1); assert.deepEqual(state.result.data.summary, expected({q: 'Search'}).summary);
   assert.equal(state.result.intent, state.intent);
+});
+
+test('overview filter ownership survives page/sort changes and composes with detail retry and close cleanup', () => {
+  let state = send(createState(), 'result:start');
+  state = send(state, 'result:success', {token: state.resultOp.token, data: data({})});
+  const resultSnapshot = state.result;
+  state = send(state, 'overview:start');
+  const initialOverview = state.overviewOp.token;
+  state = send(state, 'overview:success', {token: initialOverview, data: {services: [{service: 'Billing', incidentCount: 8}]}});
+  const overviewSnapshot = state.overview;
+  const filter = overviewIdentity(state.intent);
+
+  state = send(state, 'intent', {patch: {pageSize: 50, sort: 'severity', direction: 'asc'}});
+  assert.equal(overviewIdentity(state.intent), filter);
+  assert.equal(state.overview, overviewSnapshot);
+  assert.deepEqual([...overviewParams(state.intent).keys()], []);
+
+  state = send(state, 'detail:select', {id: rows[0].id});
+  state = send(state, 'detail:start');
+  const firstDetail = state.detail.token;
+  state = send(state, 'detail:failure', {token: firstDetail, error: 'Detail unavailable'});
+  assert.equal(announcement(state), 'Detail unavailable');
+  state = send(state, 'detail:start');
+  const retryDetail = state.detail.token;
+
+  state = send(state, 'intent', {patch: {service: ['Billing']}});
+  assert.equal(state.detail.id, null);
+  assert.equal(state.result, resultSnapshot);
+  assert.equal(state.overview, overviewSnapshot);
+  state = send(state, 'overview:start');
+  const currentOverview = state.overviewOp.token;
+  state = send(state, 'overview:failure', {token: currentOverview, error: 'Overview unavailable'});
+  assert.equal(announcement(state), 'Overview unavailable');
+  state = send(state, 'overview:start');
+  const retryOverview = state.overviewOp.token;
+  for (const type of ['overview:success', 'overview:failure', 'overview:finish']) {
+    assert.equal(send(state, type, {token: currentOverview, data: {services: []}, error: 'old overview'}), state);
+  }
+  for (const type of ['detail:success', 'detail:failure', 'detail:finish']) {
+    assert.equal(send(state, type, {token: retryDetail, data: rows[0], error: 'late detail'}), state);
+  }
+  state = send(state, 'detail:select', {id: rows[1].id});
+  state = send(state, 'detail:start');
+  const selectedDetail = state.detail.token;
+  state = send(state, 'detail:success', {token: selectedDetail, data: rows[1]});
+  assert.equal(state.detail.data.id, rows[1].id);
+  state = send(state, 'detail:close');
+  for (const type of ['detail:success', 'detail:failure', 'detail:finish']) {
+    assert.equal(send(state, type, {token: selectedDetail, data: rows[1], error: 'closed'}), state);
+  }
+  state = send(state, 'overview:success', {token: retryOverview, data: {services: []}});
+  assert.equal(state.overview.identity, overviewIdentity(state.intent));
+  assert.equal(state.overview.data.services.length, 0);
+  assert.equal(state.result, resultSnapshot);
 });
